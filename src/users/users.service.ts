@@ -2,12 +2,14 @@ import {
   Injectable,
   ConflictException,
   NotFoundException,
+  BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { UserStatus } from '@prisma/client';
 import { CreateUserDto } from './dto/create-user.dto';
 import { randomUUID } from 'crypto';
-import { ExceptionsHandler } from '@nestjs/core/exceptions/exceptions-handler';
+import bcrypt from 'bcrypt';
+import { AcceptInvite } from './dto/accept-invite-dto';
 @Injectable()
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
@@ -84,6 +86,62 @@ export class UsersService {
     });
     return {
       message: 'User Invited Successfully',
+      data: updatedUser,
+    };
+  }
+  async acceptInvitation(dto: AcceptInvite) {
+    const { token, password, confirmPassword } = dto;
+
+    if (password !== confirmPassword) {
+      throw new BadRequestException('Password is not matching');
+    }
+    const user = await this.prisma.user.findFirst({
+      where: {
+        invitationToken: token,
+      },
+      include: {
+        role: true,
+      },
+    });
+    if (!user) {
+      throw new BadRequestException('Invalid invitation link');
+    }
+    if (user.status !== UserStatus.INVITED) {
+      throw new BadRequestException('Invitation is not valid');
+    }
+
+    if (!user.invitationExpires || user.invitationExpires < new Date()) {
+      throw new BadRequestException('Invitation link will be expired');
+    }
+    const hashPassword = await bcrypt.hash(password, 10);
+    const updatedUser = await this.prisma.user.update({
+      where: {
+        id: user.id,
+      },
+      data: {
+        password: hashPassword,
+        status: UserStatus.ACTIVE,
+        invitationExpires: null,
+        invitationToken: null,
+      },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        mobile: true,
+        status: true,
+        role: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+          },
+        },
+      },
+    });
+    return {
+      message: 'User is activated succesfully',
       data: updatedUser,
     };
   }
